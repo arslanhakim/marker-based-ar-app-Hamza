@@ -63,6 +63,17 @@ const clock = new THREE.Clock();
 const NEAR_DISTANCE = 1.6; // get this close (or closer) to trigger
 const FAR_DISTANCE = 2.4; // pull back past this to reset
 const DEBUG_PROXIMITY = false; // true -> show the live distance in the status pill (for tuning)
+
+// Character placement (tunable).
+// The model is Y-up (feet at y≈0, head up +Y). The marker lies in the anchor's
+// X/Y plane; the marker normal is its Z axis. To make the robot STAND on the
+// marker we rotate it 90° about X so its up-axis becomes the marker normal.
+// In this mindar-image-three build the head must point toward the viewer, which
+// is -90° about X (using +90° tips the head into the marker, so it looks like
+// it's lying flat / viewed from above). Flip the sign if it ever stands the
+// wrong way on your device.
+const STAND_ROTATION_X = -Math.PI / 2;
+const CHARACTER_HEIGHT = 0.8; // model height in marker-width units (1 = marker edge)
 let nearMarker = null; // true/false zone; null = calibrate on (re)acquisition without toggling
 const markerPos = new THREE.Vector3(); // reused each frame
 
@@ -77,18 +88,24 @@ loader.load(
       clips.map((c) => c.name),
     );
 
-    // Scale to ~0.8 marker units and sit the feet on the surface.
+    // Scale so the model is CHARACTER_HEIGHT tall, and move its feet (the model's
+    // lowest point) to the model origin so it pivots about the feet.
     const box = new THREE.Box3().setFromObject(robot);
     const size = new THREE.Vector3();
     box.getSize(size);
-    const scale = 0.8 / size.y;
+    const scale = CHARACTER_HEIGHT / size.y;
     robot.scale.setScalar(scale);
-    robot.position.y = -box.min.y * scale;
+    robot.position.y = -box.min.y * scale; // feet -> model-local y = 0
+    robot.position.x = -((box.min.x + box.max.x) / 2) * scale; // center horizontally
+    robot.position.z = -((box.min.z + box.max.z) / 2) * scale;
 
-    // Stand the Y-up model up along the marker's +z.
+    // Stand the model up: rotate 90° about X so its up-axis becomes the marker
+    // normal. Because the feet were moved to the pivot, after this rotation the
+    // feet sit exactly on the marker plane (anchor z = 0) and the body rises off
+    // the marker toward the viewer — i.e. standing like a figurine, centered.
     character = new THREE.Group();
     character.add(robot);
-    character.rotation.x = Math.PI / 2;
+    character.rotation.x = STAND_ROTATION_X;
     anchor.group.add(character);
 
     // Mixer + the three actions we use this phase.

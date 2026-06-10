@@ -23,7 +23,7 @@ Android** (and any modern browser with a camera).
 - Three animation triggers, all driving **one shared Running ↔ Jump state machine**:
   1. **Tap** the character (raycast) — laptop: mouse click
   2. **On-screen UI button** ("Switch Animation")
-  3. **Pinch-to-zoom** past a threshold — laptop: mouse wheel or `+` / `-` keys
+  3. **Marker proximity** — move the phone close to the marker (and back) to switch
 
 ## Run locally
 
@@ -73,4 +73,4 @@ Camera access (`getUserMedia`) requires HTTPS, which Vercel provides.
 1. Run the app and allow camera access.
 2. Point the camera at the marker — the robot appears standing on it (Idle).
 3. Trigger an animation switch by tapping the robot, pressing the button, or
-   pinching/zooming past the threshold. All three stay in sync.
+   moving the phone close to / away from the marker. All three stay in sync.

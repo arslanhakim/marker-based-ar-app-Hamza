@@ -31,6 +31,9 @@
         height: 100%;
         overflow: hidden;
         background: #000;
+        /* Block the browser's own pinch-zoom / double-tap-zoom during the demo. */
+        touch-action: none;
+        overscroll-behavior: none;
       }
 
       /* Full-screen stage. MindAR injects its own <video> feed and the
@@ -39,6 +42,12 @@
         position: fixed;
         inset: 0;
         overflow: hidden;
+        touch-action: none;
+      }
+
+      /* The AR canvas must not capture browser gestures either. */
+      #ar-container canvas {
+        touch-action: none;
       }
 
       /* Status pill — scaffolding aid, removed in a later polish phase. */

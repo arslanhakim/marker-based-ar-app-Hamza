@@ -1,8 +1,9 @@
 // AR triggers — all three on ONE shared Running/Jump state machine:
-//   #1 tap the robot (raycast), #2 the UI button, #3 pinch-to-zoom threshold.
+//   #1 tap the robot (raycast), #2 the UI button, #3 marker proximity.
 // Every entry point calls the same toggleAnimation(), so they can never desync.
-// Zoom also scales the character between clamps; the threshold crossing fires
-// the toggle. Laptop fallbacks: click = tap, mouse wheel / +- keys = zoom.
+// Proximity (#3) watches the camera-to-marker distance each frame: move the
+// phone CLOSE to the marker to switch, pull AWAY to switch back. No touch
+// gesture is involved, so the browser can't steal it as a page pinch-zoom.
 
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js';
 import * as THREE from 'three';
@@ -34,6 +35,7 @@ const anchor = mindarThree.addAnchor(0);
 let detected = false; // marker currently tracked? (gates the trigger)
 anchor.onTargetFound = () => {
   detected = true;
+  nearMarker = null; // recalibrate the proximity zone for this acquisition
   status.textContent = 'Marker detected ✅';
   switchBtn.disabled = false; // enable the UI button while the character is on screen
 };
@@ -45,20 +47,24 @@ anchor.onTargetLost = () => {
 
 // 4) Character + animation state (assigned once the GLB loads).
 let robot = null; // raycast target
-let character = null; // wrapper group we scale for zoom (keeps feet on the marker)
+let character = null; // wrapper group standing the model up on the marker
 let mixer = null;
 let currentAction = null; // the action currently playing
 const actions = {}; // name -> AnimationAction
-let showingRunning = false; // false: next tap -> Running, true: next tap -> Jump
+let showingRunning = false; // false: next toggle -> Running, true: next toggle -> Jump
 const clock = new THREE.Clock();
 
-// Zoom (Trigger #3) state. We scale the character wrapper between these clamps;
-// crossing ZOOM_THRESHOLD fires the shared toggle (with hysteresis via zoomedIn).
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2.5;
-const ZOOM_THRESHOLD = 1.6;
-let zoom = 1.0;
-let zoomedIn = false; // are we currently past the threshold?
+// Proximity trigger (#3) — tunable. We read the camera-to-marker distance from
+// the anchor's world matrix every frame. Distance is in MindAR "marker-width"
+// units (marker edge = 1 unit), so smaller = the phone is closer / marker looks
+// bigger. Two thresholds give hysteresis so jitter at the line doesn't spam:
+//   cross BELOW NEAR_DISTANCE  -> "zoomed in"  -> toggle
+//   cross ABOVE FAR_DISTANCE   -> "zoomed out" -> toggle back
+const NEAR_DISTANCE = 1.6; // get this close (or closer) to trigger
+const FAR_DISTANCE = 2.4; // pull back past this to reset
+const DEBUG_PROXIMITY = false; // true -> show the live distance in the status pill (for tuning)
+let nearMarker = null; // true/false zone; null = calibrate on (re)acquisition without toggling
+const markerPos = new THREE.Vector3(); // reused each frame
 
 const loader = new GLTFLoader();
 loader.load(
@@ -83,7 +89,6 @@ loader.load(
     character = new THREE.Group();
     character.add(robot);
     character.rotation.x = Math.PI / 2;
-    character.scale.setScalar(zoom);
     anchor.group.add(character);
 
     // Mixer + the three actions we use this phase.
@@ -139,18 +144,33 @@ function toggleAnimation() {
   }
 }
 
-// Apply a new zoom level: clamp, scale the character, and fire the shared
-// toggle once on each threshold crossing (hysteresis prevents repeat firing).
-function applyZoom(next) {
-  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
-  if (character) character.scale.setScalar(zoom);
+// Trigger #3 — marker proximity. Called every frame while the marker is tracked.
+// The anchor's world-matrix translation is the marker position relative to the
+// camera (MindAR keeps the camera at the origin), so its length is the distance.
+function checkProximity() {
+  if (!mixer) return; // model not ready yet
+  // MindAR writes anchor.group.matrix every frame (marker pose in camera space,
+  // camera at the origin). The anchor is a direct child of the scene, so this
+  // local matrix IS the world transform — and it's always current.
+  markerPos.setFromMatrixPosition(anchor.group.matrix);
+  const distance = markerPos.length();
 
-  if (!zoomedIn && zoom >= ZOOM_THRESHOLD) {
-    zoomedIn = true;
-    toggleAnimation(); // crossed in -> switch
-  } else if (zoomedIn && zoom < ZOOM_THRESHOLD) {
-    zoomedIn = false;
-    toggleAnimation(); // crossed back -> switch back
+  if (DEBUG_PROXIMITY) status.textContent = 'distance: ' + distance.toFixed(2);
+
+  // First frame after (re)acquisition: set the starting zone, don't toggle.
+  if (nearMarker === null) {
+    nearMarker = distance < NEAR_DISTANCE;
+    return;
+  }
+
+  if (!nearMarker && distance < NEAR_DISTANCE) {
+    nearMarker = true;
+    toggleAnimation(); // moved close -> switch
+    if (!DEBUG_PROXIMITY) status.textContent = '🔍 Zoomed in → ' + (showingRunning ? 'Running' : 'Jump');
+  } else if (nearMarker && distance > FAR_DISTANCE) {
+    nearMarker = false;
+    toggleAnimation(); // pulled away -> switch back
+    if (!DEBUG_PROXIMITY) status.textContent = '↔ Zoomed out → ' + (showingRunning ? 'Running' : 'Jump');
   }
 }
 
@@ -169,32 +189,24 @@ function raycastTapAt(clientX, clientY) {
   }
 }
 
-// 6) Unified pointer handling: a single quiet pointer = tap (Trigger #1);
-//    two pointers = pinch-to-zoom (Trigger #3). Tracking both here lets us
-//    suppress the tap when a pinch is in progress, so they never collide.
-const TAP_MOVE_TOLERANCE = 10; // px — beyond this a press is a drag/pinch, not a tap
+// 6) Pointer handling for Trigger #1 (tap). A tap is a single pointer that goes
+//    down and up in roughly the same spot. We track pointers so a multi-touch
+//    (e.g. two fingers) never registers as a tap. There is no pinch handler —
+//    zoom is now proximity-based and needs no gesture.
+const TAP_MOVE_TOLERANCE = 10; // px — beyond this a press is a drag, not a tap
 const activePointers = new Map(); // pointerId -> { x, y }
 let tapCandidate = null; // { id, x, y } while a single clean tap is possible
-let pinchStartDist = 0;
-let pinchStartZoom = 1;
-
-function pinchDistance() {
-  const pts = [...activePointers.values()];
-  return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-}
 
 function onPointerDown(event) {
-  // The UI button handles its own click; don't let it start tap/pinch tracking.
+  // The UI button handles its own click; don't let it start tap tracking.
   if (event.target.closest && event.target.closest('#switch-btn')) return;
 
   activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
   if (activePointers.size === 1) {
     tapCandidate = { id: event.pointerId, x: event.clientX, y: event.clientY };
-  } else if (activePointers.size === 2) {
-    tapCandidate = null; // a second finger -> this is a pinch, not a tap
-    pinchStartDist = pinchDistance();
-    pinchStartZoom = zoom;
+  } else {
+    tapCandidate = null; // more than one finger down -> not a tap
   }
 }
 
@@ -204,11 +216,8 @@ function onPointerMove(event) {
   p.x = event.clientX;
   p.y = event.clientY;
 
-  if (activePointers.size >= 2) {
-    // Pinch: scale relative to the distance when the second finger landed.
-    if (pinchStartDist > 0) applyZoom(pinchStartZoom * (pinchDistance() / pinchStartDist));
-  } else if (tapCandidate && event.pointerId === tapCandidate.id) {
-    // Moved too far -> it's a drag, not a tap.
+  // Moved too far -> it's a drag, not a tap.
+  if (tapCandidate && event.pointerId === tapCandidate.id) {
     if (Math.hypot(event.clientX - tapCandidate.x, event.clientY - tapCandidate.y) > TAP_MOVE_TOLERANCE) {
       tapCandidate = null;
     }
@@ -218,7 +227,6 @@ function onPointerMove(event) {
 function onPointerUp(event) {
   const wasTap = tapCandidate && event.pointerId === tapCandidate.id;
   activePointers.delete(event.pointerId);
-  if (activePointers.size < 2) pinchStartDist = 0; // pinch ended
 
   if (wasTap) {
     tapCandidate = null;
@@ -234,23 +242,8 @@ window.addEventListener('pointercancel', onPointerUp);
 // The UI button (Trigger #2) is a second entry point into the same toggle.
 switchBtn.addEventListener('click', toggleAnimation);
 
-// 7) Laptop fallback for zoom (no touch pinch): mouse wheel and +/- keys
-//    drive the exact same zoom scale + threshold trigger.
-window.addEventListener(
-  'wheel',
-  (event) => {
-    event.preventDefault();
-    applyZoom(zoom * (1 - event.deltaY * 0.001)); // scroll up = zoom in
-  },
-  { passive: false },
-);
-
-window.addEventListener('keydown', (event) => {
-  if (event.key === '+' || event.key === '=') applyZoom(zoom * 1.1);
-  else if (event.key === '-' || event.key === '_') applyZoom(zoom * 0.9);
-});
-
-// 6) Start tracking and render.
+// 7) Start tracking and render. The proximity trigger (#3) is evaluated each
+//    frame here while the marker is detected.
 async function start() {
   status.textContent = 'Loading target & camera…';
   try {
@@ -259,6 +252,7 @@ async function start() {
     renderer.setAnimationLoop(() => {
       const dt = clock.getDelta();
       if (mixer) mixer.update(dt);
+      if (detected) checkProximity();
       renderer.render(scene, camera);
     });
   } catch (err) {

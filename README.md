@@ -50,6 +50,24 @@ npm run preview  # preview the production build
   and save the result as `public/targets.mind`.
 - Regenerate the marker image: `node scripts/generate-marker.mjs`.
 
+## Installable PWA (Android APK via PWABuilder)
+
+This app is a self-contained, installable PWA — no runtime CDN dependencies (the
+model and `targets.mind` load from same-origin `/public`).
+
+- **Manifest:** [`public/manifest.webmanifest`](public/manifest.webmanifest)
+  (name **Marker AR Robot**, short_name **AR Robot**, `display: standalone`).
+- **Icons:** `public/icons/` — 192 & 512 (`any`) plus 192 & 512 `maskable`.
+  Regenerate with `node scripts/generate-icons.mjs`.
+- **Service worker:** [`public/sw.js`](public/sw.js) — precaches the app shell +
+  model + target and serves them offline after first load. Registered from
+  `main.js` in production builds only. It only intercepts same-origin GET
+  requests, so it never touches the camera (`getUserMedia`).
+
+To package an APK: `npm run build`, deploy `dist/` over **HTTPS** (e.g. Vercel),
+then point [PWABuilder](https://www.pwabuilder.com/) at the deployed URL.
+Camera access (`getUserMedia`) requires HTTPS, which Vercel provides.
+
 ## How to use
 
 1. Run the app and allow camera access.

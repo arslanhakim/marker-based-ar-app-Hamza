@@ -268,3 +268,13 @@ async function start() {
 }
 
 start();
+
+// Register the service worker (production builds only — avoids dev caching).
+// The SW provides offline/installable PWA support and never touches the camera.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.warn('Service worker registration failed:', err);
+    });
+  });
+}

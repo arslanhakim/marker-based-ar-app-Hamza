@@ -1,16 +1,17 @@
-// Simple, robust service worker for the Marker AR Robot PWA.
+// Service worker for the Marker AR Robot PWA.
 //
-// Strategy:
-//  - Precache the stable app shell + large same-origin assets (model, target,
-//    manifest, icons) so the app works offline after the first load.
-//  - Vite emits hashed JS/CSS under /assets/ whose names aren't known here, so
-//    those are cached at runtime on first fetch (cache-first).
-//  - Navigations are network-first with an offline fallback to the cached shell.
+// Strategy (important — see the targets.mind bug this fixes):
+//  - /assets/* are content-hashed and immutable -> CACHE-FIRST (fast, safe).
+//  - EVERYTHING ELSE (navigations, /targets.mind, the model, icons, manifest)
+//    -> NETWORK-FIRST with a cache fallback for offline. These have STABLE URLs
+//    but their CONTENTS change between deploys (e.g. recompiling targets.mind),
+//    so cache-first would pin the device to a stale file forever. Network-first
+//    means an online device always gets the latest, and offline still works.
 //
 // It only ever touches same-origin GET requests. getUserMedia / the camera is a
 // MediaStream (not a network fetch), so the service worker never intercepts it.
 
-const CACHE = 'ar-robot-pwa-v1';
+const CACHE = 'ar-robot-pwa-v2';
 
 const PRECACHE_URLS = [
   '/',
@@ -19,6 +20,7 @@ const PRECACHE_URLS = [
   '/RobotExpressive.glb',
   '/targets.mind',
   '/marker.png',
+  '/trigger.png',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/icon-192-maskable.png',
@@ -44,6 +46,14 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function cachePut(request, response) {
+  if (response && response.ok && response.type === 'basic') {
+    const copy = response.clone();
+    caches.open(CACHE).then((cache) => cache.put(request, copy));
+  }
+  return response;
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
@@ -52,26 +62,25 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Navigations: network-first, fall back to the cached app shell offline.
-  if (request.mode === 'navigate') {
+  // Immutable, content-hashed build assets -> cache-first.
+  if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
-      fetch(request).catch(() => caches.match('/index.html').then((r) => r || caches.match('/'))),
+      caches.match(request).then((cached) => cached || fetch(request).then((r) => cachePut(request, r))),
     );
     return;
   }
 
-  // Static assets: cache-first, populate the cache on first fetch.
+  // Everything else -> network-first, cache fallback (ignoreSearch so a
+  // versioned URL like /targets.mind?v=2 still falls back to the precached file).
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
-        // Only cache valid, basic (same-origin) responses.
-        if (response && response.ok && response.type === 'basic') {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      });
-    }),
+    fetch(request)
+      .then((r) => cachePut(request, r))
+      .catch(() =>
+        caches.match(request, { ignoreSearch: true }).then((cached) => {
+          if (cached) return cached;
+          if (request.mode === 'navigate') return caches.match('/index.html');
+          return Response.error();
+        }),
+      ),
   );
 });

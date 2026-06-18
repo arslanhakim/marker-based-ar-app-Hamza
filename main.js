@@ -28,7 +28,9 @@ const TRIGGER_ACTION = 'Punch'; // action while the trigger image is visible
 //    the default is 1, which would never see both together.
 const mindarThree = new MindARThree({
   container,
-  imageTargetSrc: '/targets.mind',
+  // ?v= busts any stale service-worker cache from an older deploy. Bump this
+  // whenever targets.mind is recompiled so devices fetch the new file.
+  imageTargetSrc: '/targets.mind?v=2',
   maxTrack: 2,
   uiLoading: 'no',
   uiScanning: 'no',
@@ -49,11 +51,13 @@ const triggerAnchor = mindarThree.addAnchor(1);
 
 let detected = false; // base marker tracked? (gates tap/button)
 baseAnchor.onTargetFound = () => {
+  console.log('[AR] anchor 0 (BASE) onTargetFound');
   detected = true;
   status.textContent = 'Base marker detected ✅';
   switchBtn.disabled = false;
 };
 baseAnchor.onTargetLost = () => {
+  console.log('[AR] anchor 0 (BASE) onTargetLost');
   detected = false;
   status.textContent = 'Searching for base marker…';
   switchBtn.disabled = true;
@@ -64,12 +68,14 @@ baseAnchor.onTargetLost = () => {
 // ONLY the trigger image and confirm whether it's recognized (the robot won't
 // show without the base marker — that's expected; just watch the label).
 triggerAnchor.onTargetFound = () => {
+  console.log('[AR] anchor 1 (TRIGGER) onTargetFound');
   triggerStatus.textContent = 'TRIGGER: detected';
   triggerStatus.classList.add('detected');
   playAction(TRIGGER_ACTION);
   status.textContent = '✦ Trigger image → ' + TRIGGER_ACTION;
 };
 triggerAnchor.onTargetLost = () => {
+  console.log('[AR] anchor 1 (TRIGGER) onTargetLost');
   triggerStatus.textContent = 'TRIGGER: not detected';
   triggerStatus.classList.remove('detected');
   playAction(BASE_ACTION);

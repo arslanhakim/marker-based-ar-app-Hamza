@@ -96,6 +96,41 @@
         cursor: not-allowed;
       }
 
+      /* Diagnostic indicator (top-left): shows the TRIGGER marker (anchor 1)
+         tracking state in real time, independent of the base marker. */
+      #trigger-status {
+        position: fixed;
+        left: max(10px, env(safe-area-inset-left));
+        top: max(10px, env(safe-area-inset-top));
+        z-index: 11;
+        font: 600 12px system-ui, -apple-system, sans-serif;
+        color: #fff;
+        background: rgba(90, 90, 90, 0.85); /* grey = not detected */
+        padding: 6px 10px;
+        border-radius: 8px;
+        pointer-events: none;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #trigger-status::before {
+        content: '';
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #c0c0c0;
+      }
+
+      #trigger-status.detected {
+        background: rgba(17, 122, 55, 0.9); /* green = detected */
+      }
+
+      #trigger-status.detected::before {
+        background: #36e07a;
+      }
+
       /* Hint line explaining the triggers, just above the button. */
       #hint {
         position: fixed;
@@ -118,6 +153,7 @@
   <body>
     <div id="ar-container"></div>
     <div id="status">Loading…</div>
+    <div id="trigger-status">TRIGGER: not detected</div>
     <div id="hint">
       Tap the robot or press the button to switch its action — or show the
       <strong>2nd image (trigger)</strong> to the camera to change it.

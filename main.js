@@ -15,6 +15,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 const container = document.querySelector('#ar-container');
 const status = document.querySelector('#status');
 const switchBtn = document.querySelector('#switch-btn');
+const triggerStatus = document.querySelector('#trigger-status'); // diagnostic label
 
 // The two clips everything switches between. Easy to change — must be real clip
 // names from RobotExpressive.glb: Dance, Death, Idle, Jump, No, Punch, Running,
@@ -58,12 +59,19 @@ baseAnchor.onTargetLost = () => {
   switchBtn.disabled = true;
 };
 
-// Trigger image presence drives the action deterministically.
+// Trigger image presence drives the action deterministically. The diagnostic
+// label updates independently of the base marker, so you can point the camera at
+// ONLY the trigger image and confirm whether it's recognized (the robot won't
+// show without the base marker — that's expected; just watch the label).
 triggerAnchor.onTargetFound = () => {
+  triggerStatus.textContent = 'TRIGGER: detected';
+  triggerStatus.classList.add('detected');
   playAction(TRIGGER_ACTION);
   status.textContent = '✦ Trigger image → ' + TRIGGER_ACTION;
 };
 triggerAnchor.onTargetLost = () => {
+  triggerStatus.textContent = 'TRIGGER: not detected';
+  triggerStatus.classList.remove('detected');
   playAction(BASE_ACTION);
   status.textContent = '↩ Trigger removed → ' + BASE_ACTION;
 };

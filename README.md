@@ -18,12 +18,16 @@ Android** (and any modern browser with a camera).
 
 ## Features
 
-- Full-screen rear-camera AR with MindAR image tracking
-- `RobotExpressive` character standing upright on the marker, looping **Idle**
-- Three animation triggers, all driving **one shared Running ↔ Jump state machine**:
+- Full-screen rear-camera AR with MindAR image tracking (two image targets)
+- `RobotExpressive` character standing upright on the base marker
+- Three animation triggers, all switching the character between two clips
+  (`BASE_ACTION` = **Running**, `TRIGGER_ACTION` = **Punch**; easy to change at the
+  top of `main.js`):
   1. **Tap** the character (raycast) — laptop: mouse click
   2. **On-screen UI button** ("Switch Animation")
-  3. **Marker proximity** — move the phone close to the marker (and back) to switch
+  3. **Second image target ("trigger")** — show the trigger image to the camera and
+     the character switches to `TRIGGER_ACTION`; remove it and it returns to
+     `BASE_ACTION` (presence-based, so it always re-syncs)
 
 ## Run locally
 
@@ -40,15 +44,20 @@ npm run build    # production build into dist/
 npm run preview  # preview the production build
 ```
 
-## The marker
+## The markers (two image targets)
 
-- Printable marker: [`public/marker.png`](public/marker.png) — print it or display
-  it on a screen, keep it flat and well-lit.
+- Base marker: [`public/marker.png`](public/marker.png) — holds the character.
+- Trigger image: [`public/trigger.png`](public/trigger.png) — show it to the camera
+  to change the character's action.
+- Print both (or display on a screen), keep them flat and well-lit.
 - Compiled tracking target: [`public/targets.mind`](public/targets.mind) (already
-  included). To regenerate from a new image, use the
-  [MindAR online compiler](https://hiukim.github.io/mind-ar-js-doc/tools/compile/)
-  and save the result as `public/targets.mind`.
-- Regenerate the marker image: `node scripts/generate-marker.mjs`.
+  included) — contains **both** images: base = index 0, trigger = index 1. To
+  recompile, open the
+  [MindAR online compiler](https://hiukim.github.io/mind-ar-js-doc/tools/compile/),
+  add `marker.png` **first** then `trigger.png`, compile, and save the result as
+  `public/targets.mind`.
+- Regenerate the images: `node scripts/generate-marker.mjs` and
+  `node scripts/generate-trigger.mjs`.
 
 ## Installable PWA (Android APK via PWABuilder)
 

@@ -1,9 +1,12 @@
-// AR triggers — all three on ONE shared Running/Jump state machine:
-//   #1 tap the robot (raycast), #2 the UI button, #3 marker proximity.
-// Every entry point calls the same toggleAnimation(), so they can never desync.
-// Proximity (#3) watches the camera-to-marker distance each frame: move the
-// phone CLOSE to the marker to switch, pull AWAY to switch back. No touch
-// gesture is involved, so the browser can't steal it as a page pinch-zoom.
+// AR triggers — all switch the SAME character between two clips, BASE_ACTION and
+// TRIGGER_ACTION:
+//   #1 tap the robot (raycast)         -> flip between the two clips
+//   #2 the on-screen "Switch" button   -> flip between the two clips
+//   #3 a SECOND image target ("trigger") -> PRESENCE based:
+//        trigger image visible  -> TRIGGER_ACTION
+//        trigger image removed   -> BASE_ACTION
+// #3 is deterministic with the trigger marker's presence (it sets the action on
+// found/lost), so showing/hiding the trigger image always re-syncs the state.
 
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js';
 import * as THREE from 'three';
@@ -13,10 +16,19 @@ const container = document.querySelector('#ar-container');
 const status = document.querySelector('#status');
 const switchBtn = document.querySelector('#switch-btn');
 
-// 1) Initialize MindAR's image-three system with the compiled target.
+// The two clips everything switches between. Easy to change — must be real clip
+// names from RobotExpressive.glb: Dance, Death, Idle, Jump, No, Punch, Running,
+// Sitting, Standing, ThumbsUp, Walking, WalkJump, Wave, Yes.
+const BASE_ACTION = 'Running'; // default action on the base marker
+const TRIGGER_ACTION = 'Punch'; // action while the trigger image is visible
+
+// 1) Initialize MindAR with the compiled target file. maxTrack: 2 lets BOTH the
+//    base marker (index 0) and the trigger image (index 1) be detected at once —
+//    the default is 1, which would never see both together.
 const mindarThree = new MindARThree({
   container,
   imageTargetSrc: '/targets.mind',
+  maxTrack: 2,
   uiLoading: 'no',
   uiScanning: 'no',
   uiError: 'no',
@@ -29,40 +41,41 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
 dirLight.position.set(0.5, 1, 1);
 scene.add(dirLight);
 
-// 3) One anchor bound to target index 0 (our single marker).
-const anchor = mindarThree.addAnchor(0);
+// 3) Two anchors. Index 0 = base marker (holds the character). Index 1 = trigger
+//    image (no visible model — its only job is presence detection).
+const baseAnchor = mindarThree.addAnchor(0);
+const triggerAnchor = mindarThree.addAnchor(1);
 
-let detected = false; // marker currently tracked? (gates the trigger)
-anchor.onTargetFound = () => {
+let detected = false; // base marker tracked? (gates tap/button)
+baseAnchor.onTargetFound = () => {
   detected = true;
-  nearMarker = null; // recalibrate the proximity zone for this acquisition
-  status.textContent = 'Marker detected ✅';
-  switchBtn.disabled = false; // enable the UI button while the character is on screen
+  status.textContent = 'Base marker detected ✅';
+  switchBtn.disabled = false;
 };
-anchor.onTargetLost = () => {
+baseAnchor.onTargetLost = () => {
   detected = false;
-  status.textContent = 'Searching for marker…';
-  switchBtn.disabled = true; // dim the button — nothing to animate
+  status.textContent = 'Searching for base marker…';
+  switchBtn.disabled = true;
+};
+
+// Trigger image presence drives the action deterministically.
+triggerAnchor.onTargetFound = () => {
+  playAction(TRIGGER_ACTION);
+  status.textContent = '✦ Trigger image → ' + TRIGGER_ACTION;
+};
+triggerAnchor.onTargetLost = () => {
+  playAction(BASE_ACTION);
+  status.textContent = '↩ Trigger removed → ' + BASE_ACTION;
 };
 
 // 4) Character + animation state (assigned once the GLB loads).
 let robot = null; // raycast target
 let character = null; // wrapper group standing the model up on the marker
 let mixer = null;
-let currentAction = null; // the action currently playing
+let currentAction = null; // the AnimationAction currently playing
+let currentClipName = null; // name of the clip currentAction plays
 const actions = {}; // name -> AnimationAction
-let showingRunning = false; // false: next toggle -> Running, true: next toggle -> Jump
 const clock = new THREE.Clock();
-
-// Proximity trigger (#3) — tunable. We read the camera-to-marker distance from
-// the anchor's world matrix every frame. Distance is in MindAR "marker-width"
-// units (marker edge = 1 unit), so smaller = the phone is closer / marker looks
-// bigger. Two thresholds give hysteresis so jitter at the line doesn't spam:
-//   cross BELOW NEAR_DISTANCE  -> "zoomed in"  -> toggle
-//   cross ABOVE FAR_DISTANCE   -> "zoomed out" -> toggle back
-const NEAR_DISTANCE = 1.6; // get this close (or closer) to trigger
-const FAR_DISTANCE = 2.4; // pull back past this to reset
-const DEBUG_PROXIMITY = false; // true -> show the live distance in the status pill (for tuning)
 
 // Character placement (tunable).
 // The model is Y-up (feet at y≈0, head up +Y). The marker lies in the anchor's
@@ -74,8 +87,6 @@ const DEBUG_PROXIMITY = false; // true -> show the live distance in the status p
 // wrong way on your device.
 const STAND_ROTATION_X = -Math.PI / 2;
 const CHARACTER_HEIGHT = 0.8; // model height in marker-width units (1 = marker edge)
-let nearMarker = null; // true/false zone; null = calibrate on (re)acquisition without toggling
-const markerPos = new THREE.Vector3(); // reused each frame
 
 const loader = new GLTFLoader();
 loader.load(
@@ -106,26 +117,26 @@ loader.load(
     character = new THREE.Group();
     character.add(robot);
     character.rotation.x = STAND_ROTATION_X;
-    anchor.group.add(character);
+    baseAnchor.group.add(character);
 
-    // Mixer + the three actions we use this phase.
+    // Build the two actions we switch between. Both loop so they read clearly
+    // while held. (If you pick a one-shot clip, use LoopOnce + clampWhenFinished.)
     mixer = new THREE.AnimationMixer(robot);
-    const idleClip = THREE.AnimationClip.findByName(clips, 'Idle');
-    const runClip = THREE.AnimationClip.findByName(clips, 'Running');
-    const jumpClip = THREE.AnimationClip.findByName(clips, 'Jump');
+    for (const name of [BASE_ACTION, TRIGGER_ACTION]) {
+      const clip = THREE.AnimationClip.findByName(clips, name);
+      if (!clip) {
+        console.warn('Animation clip not found in GLB:', name);
+        continue;
+      }
+      const action = mixer.clipAction(clip);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      actions[name] = action;
+    }
 
-    actions.Idle = mixer.clipAction(idleClip);
-    actions.Running = mixer.clipAction(runClip);
-    actions.Jump = mixer.clipAction(jumpClip);
-
-    // Running loops; Jump is a one-shot that holds its final pose.
-    actions.Running.setLoop(THREE.LoopRepeat, Infinity);
-    actions.Jump.setLoop(THREE.LoopOnce, 1);
-    actions.Jump.clampWhenFinished = true;
-
-    // Idle is the rest state until the first tap.
-    currentAction = actions.Idle;
-    currentAction.play();
+    // Default action on the base marker.
+    currentAction = actions[BASE_ACTION] || null;
+    currentClipName = currentAction ? BASE_ACTION : null;
+    if (currentAction) currentAction.play();
   },
   undefined,
   (err) => {
@@ -134,64 +145,32 @@ loader.load(
   },
 );
 
-// Crossfade from the current action to a target action.
-function fadeTo(action) {
-  if (!action || action === currentAction) return;
-  action.reset();
-  action.enabled = true;
-  action.setEffectiveTimeScale(1);
-  action.setEffectiveWeight(1);
-  action.play();
-  currentAction.crossFadeTo(action, 0.3, false);
-  currentAction = action;
+// Crossfade the character to a named clip. Idempotent: asking for the action
+// that's already playing does nothing — that's what keeps the trigger-presence
+// logic deterministic and desync-proof.
+function playAction(name) {
+  if (!mixer || !actions[name] || name === currentClipName) return;
+  const next = actions[name];
+  next.reset();
+  next.enabled = true;
+  next.setEffectiveTimeScale(1);
+  next.setEffectiveWeight(1);
+  next.play();
+  if (currentAction) currentAction.crossFadeTo(next, 0.3, false);
+  currentAction = next;
+  currentClipName = name;
 }
 
-// Single source of truth for the trigger. Both the raycast tap and the UI
-// button call this, so they advance the SAME state and can never desync.
+// Triggers #1 (tap) and #2 (button): flip between the two clips, using the same
+// playAction()/state as the trigger image so nothing can desync.
 function toggleAnimation() {
-  if (!detected || !mixer || !actions.Running) return; // nothing to animate
-  if (!showingRunning) {
-    fadeTo(actions.Running);
-    showingRunning = true;
-    status.textContent = '▶ Running';
-  } else {
-    fadeTo(actions.Jump);
-    showingRunning = false;
-    status.textContent = '⤒ Jump';
-  }
+  if (!detected || !mixer || !currentClipName) return; // nothing to animate yet
+  const next = currentClipName === BASE_ACTION ? TRIGGER_ACTION : BASE_ACTION;
+  playAction(next);
+  status.textContent = '🎬 ' + currentClipName;
 }
 
-// Trigger #3 — marker proximity. Called every frame while the marker is tracked.
-// The anchor's world-matrix translation is the marker position relative to the
-// camera (MindAR keeps the camera at the origin), so its length is the distance.
-function checkProximity() {
-  if (!mixer) return; // model not ready yet
-  // MindAR writes anchor.group.matrix every frame (marker pose in camera space,
-  // camera at the origin). The anchor is a direct child of the scene, so this
-  // local matrix IS the world transform — and it's always current.
-  markerPos.setFromMatrixPosition(anchor.group.matrix);
-  const distance = markerPos.length();
-
-  if (DEBUG_PROXIMITY) status.textContent = 'distance: ' + distance.toFixed(2);
-
-  // First frame after (re)acquisition: set the starting zone, don't toggle.
-  if (nearMarker === null) {
-    nearMarker = distance < NEAR_DISTANCE;
-    return;
-  }
-
-  if (!nearMarker && distance < NEAR_DISTANCE) {
-    nearMarker = true;
-    toggleAnimation(); // moved close -> switch
-    if (!DEBUG_PROXIMITY) status.textContent = '🔍 Zoomed in → ' + (showingRunning ? 'Running' : 'Jump');
-  } else if (nearMarker && distance > FAR_DISTANCE) {
-    nearMarker = false;
-    toggleAnimation(); // pulled away -> switch back
-    if (!DEBUG_PROXIMITY) status.textContent = '↔ Zoomed out → ' + (showingRunning ? 'Running' : 'Jump');
-  }
-}
-
-// 5) Raycast a screen point against the robot; toggle on a hit, ignore a miss.
+// 5) Raycast a screen point against the robot; flip on a hit, ignore a miss.
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
@@ -208,8 +187,7 @@ function raycastTapAt(clientX, clientY) {
 
 // 6) Pointer handling for Trigger #1 (tap). A tap is a single pointer that goes
 //    down and up in roughly the same spot. We track pointers so a multi-touch
-//    (e.g. two fingers) never registers as a tap. There is no pinch handler —
-//    zoom is now proximity-based and needs no gesture.
+//    never registers as a tap.
 const TAP_MOVE_TOLERANCE = 10; // px — beyond this a press is a drag, not a tap
 const activePointers = new Map(); // pointerId -> { x, y }
 let tapCandidate = null; // { id, x, y } while a single clean tap is possible
@@ -259,17 +237,15 @@ window.addEventListener('pointercancel', onPointerUp);
 // The UI button (Trigger #2) is a second entry point into the same toggle.
 switchBtn.addEventListener('click', toggleAnimation);
 
-// 7) Start tracking and render. The proximity trigger (#3) is evaluated each
-//    frame here while the marker is detected.
+// 7) Start tracking and render.
 async function start() {
-  status.textContent = 'Loading target & camera…';
+  status.textContent = 'Loading targets & camera…';
   try {
     await mindarThree.start();
-    status.textContent = 'Searching for marker…';
+    status.textContent = 'Searching for base marker…';
     renderer.setAnimationLoop(() => {
       const dt = clock.getDelta();
       if (mixer) mixer.update(dt);
-      if (detected) checkProximity();
       renderer.render(scene, camera);
     });
   } catch (err) {

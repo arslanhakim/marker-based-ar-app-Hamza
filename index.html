@@ -95,11 +95,33 @@
         opacity: 0.4;
         cursor: not-allowed;
       }
+
+      /* Hint line explaining the triggers, just above the button. */
+      #hint {
+        position: fixed;
+        left: 50%;
+        bottom: calc(max(24px, env(safe-area-inset-bottom)) + 60px);
+        transform: translateX(-50%);
+        z-index: 10;
+        width: min(92vw, 460px);
+        text-align: center;
+        font: 13px system-ui, -apple-system, sans-serif;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.45);
+        padding: 8px 14px;
+        border-radius: 12px;
+        pointer-events: none;
+        line-height: 1.35;
+      }
     </style>
   </head>
   <body>
     <div id="ar-container"></div>
     <div id="status">Loading…</div>
+    <div id="hint">
+      Tap the robot or press the button to switch its action — or show the
+      <strong>2nd image (trigger)</strong> to the camera to change it.
+    </div>
     <button id="switch-btn" disabled>Switch Animation</button>
 
     <script type="module" src="/main.js"></script>
